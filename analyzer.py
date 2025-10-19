@@ -262,7 +262,7 @@ class GeoIPChecker:
                                     'org': data.get('org', ''),
                                     'as': data.get('as', ''),
                                     'is_china': is_china,
-                                    'location_type': '大陆(不包含港澳台)' if is_china else '非大陆(包含港澳台)'
+                                    'location_type': '大陆' if is_china else '非大陆'
                                 }
 
                                 # 缓存结果
@@ -739,6 +739,8 @@ class TrafficAnalyzer:
     <title>网络流量分析报告 - C2恶意软件检测</title>
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/hammerjs@2.0.8/hammer.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-zoom@2.0.1/dist/chartjs-plugin-zoom.min.js"></script>
     <style>
         * {
             margin: 0;
@@ -1441,6 +1443,14 @@ class TrafficAnalyzer:
             </div>
 
             <h3 style="margin: 30px 0 15px 0; color: #2d3748;">📈 流量时间序列图</h3>
+            <div style="background: #f7fafc; padding: 10px; border-radius: 8px; margin-bottom: 10px;">
+                <p style="color: #4a5568; font-size: 14px; margin: 0;">
+                    💡 <strong>图表操作提示：</strong>
+                    <span style="margin-left: 10px;">🖱️ <strong>鼠标滚轮</strong>：缩放图表</span>
+                    <span style="margin-left: 15px;">👆 <strong>按住拖动</strong>：平移查看</span>
+                    <span style="margin-left: 15px;">🔄 <strong>双击</strong>：重置视图</span>
+                </p>
+            </div>
             <div class="chart-container">
                 <canvas id="{chart_id}"></canvas>
             </div>
@@ -1459,10 +1469,11 @@ class TrafficAnalyzer:
                             borderColor: '#4299e1',
                             backgroundColor: 'rgba(66, 153, 225, 0.1)',
                             borderWidth: 2,
-                            pointRadius: 3,
-                            pointHoverRadius: 6,
+                            pointRadius: 4,
+                            pointHoverRadius: 7,
                             fill: false,
-                            tension: 0.1
+                            tension: 0,
+                            stepped: false
                         }},
                         {{
                             label: '接收 (Recv)',
@@ -1470,10 +1481,11 @@ class TrafficAnalyzer:
                             borderColor: '#48bb78',
                             backgroundColor: 'rgba(72, 187, 120, 0.1)',
                             borderWidth: 2,
-                            pointRadius: 3,
-                            pointHoverRadius: 6,
+                            pointRadius: 4,
+                            pointHoverRadius: 7,
                             fill: false,
-                            tension: 0.1
+                            tension: 0,
+                            stepped: false
                         }}
                     ]
                 }},
@@ -1502,6 +1514,26 @@ class TrafficAnalyzer:
                                     }}
                                     return label;
                                 }}
+                            }}
+                        }},
+                        zoom: {{
+                            zoom: {{
+                                wheel: {{
+                                    enabled: true,
+                                    speed: 0.1
+                                }},
+                                pinch: {{
+                                    enabled: true
+                                }},
+                                mode: 'xy'
+                            }},
+                            pan: {{
+                                enabled: true,
+                                mode: 'xy'
+                            }},
+                            limits: {{
+                                x: {{min: 'original', max: 'original'}},
+                                y: {{min: 'original', max: 'original'}}
                             }}
                         }}
                     }},
