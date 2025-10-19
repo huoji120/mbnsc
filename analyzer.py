@@ -444,6 +444,17 @@ class TrafficAnalyzer:
         avg_send_size = send_bytes / send_count if send_count > 0 else 0
         avg_recv_size = recv_bytes / recv_count if recv_count > 0 else 0
 
+        # 计算时间间隔信息（用于某些模式检测）
+        intervals = self.calculate_intervals(records)
+        avg_interval = statistics.mean(intervals) if intervals else 0
+        interval_stdev = statistics.stdev(intervals) if len(intervals) > 1 else 0
+
+        # 计算包大小的标准差（用于检测一致性）
+        send_sizes = [r['packet_size'] for r in records if r['direction'] == 'send']
+        recv_sizes = [r['packet_size'] for r in records if r['direction'] == 'recv']
+        send_size_stdev = statistics.stdev(send_sizes) if len(send_sizes) > 1 else 0
+        recv_size_stdev = statistics.stdev(recv_sizes) if len(recv_sizes) > 1 else 0
+
         # 分析send/recv交替模式
         directions = [r['direction'] for r in records]
 
@@ -573,7 +584,110 @@ class TrafficAnalyzer:
                 'confidence': 0.75
             }
 
-        # 10. 默认：混合模式
+        # 10. 信标通讯（Beaconing）- 严格周期性，包大小一致（C2特征）
+        if (len(intervals) >= 5 and avg_interval >= 5 and
+            interval_stdev > 0 and (interval_stdev / avg_interval) < 0.15 and
+            send_count > 0 and recv_count > 0 and
+            avg_send_size < 2000 and avg_recv_size < 2000 and
+                send_size_stdev < avg_send_size * 0.3):
+            return {
+                'pattern': 'beaconing',
+                'description': f'信标通讯 (周期 {avg_interval:.1f}s, send {send_count}↔recv {recv_count}, 平均 {avg_send_size:.0f}B)',
+                'confidence': 0.92
+            }
+
+        # 11. 数据泄露（Data Exfiltration）- 持续大量上传
+        if (send_count > 10 and
+            send_bytes > recv_bytes * 10 and
+            avg_send_size > 1024 and
+                send_count > recv_count * 1.5):
+            return {
+                'pattern': 'data_exfiltration',
+                'description': f'疑似数据泄露 (上传 {self._format_bytes(send_bytes)}, {send_count}次发送)',
+                'confidence': 0.85
+            }
+
+        # 12. 慢速滴漏（Slow Drip）- 长时间间隔的低频通信
+        if (len(intervals) >= 3 and
+            avg_interval > 300 and  # 超过5分钟间隔
+            total_count >= 3 and total_count <= 30 and
+                (send_count > 0 or recv_count > 0)):
+            return {
+                'pattern': 'slow_drip',
+                'description': f'慢速通讯 (平均间隔 {avg_interval/60:.1f}分钟, {total_count}个包)',
+                'confidence': 0.78
+            }
+
+        # 13. 突发活动（Burst Activity）- 间隔差异大，有明显沉默期
+        if (len(intervals) >= 5 and
+            interval_stdev > 0 and
+            (interval_stdev / avg_interval) > 1.5 and  # 高变异性
+            max(intervals) > avg_interval * 5 and
+                total_count >= 10):
+            return {
+                'pattern': 'burst_activity',
+                'description': f'突发活动 (间隔不规律, {total_count}个包, 最大间隔 {max(intervals):.1f}s)',
+                'confidence': 0.72
+            }
+
+        # 14. 非对称交互（Asymmetric Interactive）- 交互式但包大小差异大
+        if (alternating_ratio > 0.4 and
+            send_count > 0 and recv_count > 0 and
+            abs(send_count - recv_count) <= max(5, total_count * 0.4) and
+            ((avg_send_size > avg_recv_size * 5) or (avg_recv_size > avg_send_size * 5)) and
+                total_count >= 10):
+            if avg_send_size > avg_recv_size:
+                return {
+                    'pattern': 'asymmetric_interactive',
+                    'description': f'非对称交互 (send {avg_send_size:.0f}B >> recv {avg_recv_size:.0f}B, {total_count}次交互)',
+                    'confidence': 0.80
+                }
+            else:
+                return {
+                    'pattern': 'asymmetric_interactive',
+                    'description': f'非对称交互 (recv {avg_recv_size:.0f}B >> send {avg_send_size:.0f}B, {total_count}次交互)',
+                    'confidence': 0.80
+                }
+
+        # 15. 连接测试（Connection Test）- 极少数据包
+        if total_count <= 3 and (send_count > 0 or recv_count > 0):
+            return {
+                'pattern': 'connection_test',
+                'description': f'连接测试 (仅 {total_count}个包)',
+                'confidence': 0.68
+            }
+
+        # 16. 大文件传输（Large Transfer）- 少量超大包
+        if (total_count <= 20 and
+            ((avg_send_size > 10240) or (avg_recv_size > 10240)) and
+                (send_bytes + recv_bytes) > 51200):  # 总共超过50KB
+            if send_bytes > recv_bytes:
+                return {
+                    'pattern': 'large_transfer',
+                    'description': f'大文件上传 ({self._format_bytes(send_bytes)}, {send_count}个大包)',
+                    'confidence': 0.83
+                }
+            else:
+                return {
+                    'pattern': 'large_transfer',
+                    'description': f'大文件下载 ({self._format_bytes(recv_bytes)}, {recv_count}个大包)',
+                    'confidence': 0.83
+                }
+
+        # 17. 保活通讯（Keep Alive）- 定期极小包
+        if (len(intervals) >= 3 and
+            avg_interval >= 30 and  # 至少30秒间隔
+            avg_interval <= 600 and  # 不超过10分钟
+            interval_stdev > 0 and (interval_stdev / avg_interval) < 0.4 and
+            avg_send_size < 200 and avg_recv_size < 200 and
+                total_count >= 3 and total_count <= 50):
+            return {
+                'pattern': 'keep_alive',
+                'description': f'保活通讯 (周期 {avg_interval:.0f}s, 小包 {avg_send_size:.0f}B)',
+                'confidence': 0.76
+            }
+
+        # 18. 默认：混合模式
         return {
             'pattern': 'mixed',
             'description': f'混合模式 (send {send_count}, recv {recv_count})',
@@ -1134,6 +1248,14 @@ class TrafficAnalyzer:
                 'bulk_transfer': '批量传输',
                 'request_response': '请求-响应',
                 'scan_probe': '扫描探测',
+                'beaconing': '信标通讯',
+                'data_exfiltration': '数据泄露',
+                'slow_drip': '慢速滴漏',
+                'burst_activity': '突发活动',
+                'asymmetric_interactive': '非对称交互',
+                'connection_test': '连接测试',
+                'large_transfer': '大文件传输',
+                'keep_alive': '保活通讯',
                 'mixed': '混合模式',
                 'unknown': '未知'
             }
@@ -1307,6 +1429,14 @@ class TrafficAnalyzer:
             'bulk_transfer': '#ed8936',  # 深橙
             'request_response': '#667eea',  # 靛蓝
             'scan_probe': '#fc8181',  # 粉红
+            'beaconing': '#c53030',   # 深红（高危）
+            'data_exfiltration': '#dd6b20',  # 深橙红（高危）
+            'slow_drip': '#805ad5',   # 深紫
+            'burst_activity': '#d69e2e',  # 金黄
+            'asymmetric_interactive': '#3182ce',  # 深蓝
+            'connection_test': '#718096',  # 中灰
+            'large_transfer': '#2c7a7b',  # 深青
+            'keep_alive': '#68d391',  # 浅绿
             'mixed': '#a0aec0',      # 灰色
             'unknown': '#cbd5e0'     # 浅灰
         }
@@ -1321,6 +1451,14 @@ class TrafficAnalyzer:
             'bulk_transfer': '📦',
             'request_response': '🔄',
             'scan_probe': '🔍',
+            'beaconing': '🚨',        # 警报（高危）
+            'data_exfiltration': '⚠️',  # 警告（高危）
+            'slow_drip': '💧',        # 水滴
+            'burst_activity': '💥',    # 爆炸
+            'asymmetric_interactive': '⚖️',  # 天平
+            'connection_test': '🔌',   # 插头
+            'large_transfer': '📤',    # 文件传输
+            'keep_alive': '🔗',       # 链接
             'mixed': '🔀',
             'unknown': '❓'
         }
@@ -1623,6 +1761,14 @@ class TrafficAnalyzer:
                 'bulk_transfer': '#ed8936',
                 'request_response': '#667eea',
                 'scan_probe': '#fc8181',
+                'beaconing': '#c53030',
+                'data_exfiltration': '#dd6b20',
+                'slow_drip': '#805ad5',
+                'burst_activity': '#d69e2e',
+                'asymmetric_interactive': '#3182ce',
+                'connection_test': '#718096',
+                'large_transfer': '#2c7a7b',
+                'keep_alive': '#68d391',
                 'mixed': '#a0aec0',
                 'unknown': '#cbd5e0'
             }
@@ -1637,6 +1783,14 @@ class TrafficAnalyzer:
                 'bulk_transfer': '📦',
                 'request_response': '🔄',
                 'scan_probe': '🔍',
+                'beaconing': '🚨',
+                'data_exfiltration': '⚠️',
+                'slow_drip': '💧',
+                'burst_activity': '💥',
+                'asymmetric_interactive': '⚖️',
+                'connection_test': '🔌',
+                'large_transfer': '📤',
+                'keep_alive': '🔗',
                 'mixed': '🔀',
                 'unknown': '❓'
             }
