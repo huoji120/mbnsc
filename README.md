@@ -65,7 +65,7 @@ start traffic_report.html   # Windows
 ```bash
 git clone https://github.com/huoji120/mbnsc.git
 cd mbnsc
-go build -o mbnsc.exe main.go
+go build . -o mbnsc.exe main.go
 ```
 
 #### 步骤2: 捕获流量
@@ -123,6 +123,7 @@ python analyzer.py [输入文件] [选项]
   --threat-intel         启用威胁情报查询
   --threads NUM          设置分析线程数
   --help                 显示帮助信息
+  --proxy --proxy-host 代理ip --proxy-port 代理端口 使用代理能加快速度
 ```
 
 ### 使用场景示例
