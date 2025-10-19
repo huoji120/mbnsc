@@ -65,7 +65,7 @@ start traffic_report.html   # Windows
 ```bash
 git clone https://github.com/huoji120/mbnsc.git
 cd mbnsc
-go build . -o mbnsc.exe main.go
+go build .
 ```
 
 #### 步骤2: 捕获流量
@@ -231,11 +231,9 @@ cd mbnsc
 # 安装Go依赖
 go mod tidy
 
-# 编译调试版本
-go build -ldflags="-X main.debug=true" -o mbnsc_debug.exe
+# 直接跑
+go run .
 
-# 运行测试
-go test ./...
 ```
 
 ### 代码风格
