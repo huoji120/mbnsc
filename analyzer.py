@@ -215,9 +215,11 @@ class GeoIPChecker:
         for i in range(0, len(uncached_ips), self.batch_size):
             batch_ips = uncached_ips[i:i + self.batch_size]
             batch_num = i // self.batch_size + 1
-            total_batches = (len(uncached_ips) + self.batch_size - 1) // self.batch_size
+            total_batches = (len(uncached_ips) +
+                             self.batch_size - 1) // self.batch_size
 
-            print(f"[*] 处理批次 {batch_num}/{total_batches}: {', '.join(batch_ips)}")
+            print(
+                f"[*] 处理批次 {batch_num}/{total_batches}: {', '.join(batch_ips)}")
 
             try:
                 # 构建批量查询请求
@@ -248,8 +250,8 @@ class GeoIPChecker:
                                 country = data.get('country', '')
 
                                 # 判断是否为中国（包括大陆、香港、澳门、台湾）
-                                is_china = country_code in ['CN', 'HK', 'MO', 'TW']
-
+                                # is_china = country_code in ['CN', 'HK', 'MO', 'TW']
+                                is_china = country_code in ['CN']
                                 result = {
                                     'success': True,
                                     'country': country,
@@ -260,7 +262,7 @@ class GeoIPChecker:
                                     'org': data.get('org', ''),
                                     'as': data.get('as', ''),
                                     'is_china': is_china,
-                                    'location_type': '国内' if is_china else '国外'
+                                    'location_type': '大陆(不包含港澳台)' if is_china else '非大陆(包含港澳台)'
                                 }
 
                                 # 缓存结果
@@ -1768,7 +1770,8 @@ def main():
     # 创建GeoIP检查器（支持代理）
     if args.proxy:
         if args.proxy_host and args.proxy_port:
-            geo_checker = GeoIPChecker(use_proxy=True, proxy_host=args.proxy_host, proxy_port=args.proxy_port)
+            geo_checker = GeoIPChecker(
+                use_proxy=True, proxy_host=args.proxy_host, proxy_port=args.proxy_port)
         else:
             geo_checker = GeoIPChecker(use_proxy=True)  # 使用系统代理
     else:
