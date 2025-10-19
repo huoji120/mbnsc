@@ -113,22 +113,36 @@ class OTXChecker:
 
 
 class GeoIPChecker:
-    """IP地理位置查询器"""
+    """IP地理位置查询器 - 支持批量查询和代理"""
 
-    def __init__(self):
-        self.base_url = "http://ip-api.com/json/"
-        self.session = requests.Session()
+    def __init__(self, use_proxy: bool = False, proxy_host: str = None, proxy_port: int = None):
+        self.base_url = "http://ip-api.com/batch"
+        self.single_url = "http://ip-api.com/json/"
         self.cache = {}  # 缓存查询结果
+        self.batch_size = 10  # 批量查询每次最多10个IP
+
+        # 设置代理
+        self.session = requests.Session()
+        if use_proxy and proxy_host and proxy_port:
+            proxies = {
+                'http': f'http://{proxy_host}:{proxy_port}',
+                'https': f'http://{proxy_host}:{proxy_port}'
+            }
+            self.session.proxies.update(proxies)
+            print(f"[+] 使用代理: {proxy_host}:{proxy_port}")
+        elif use_proxy:
+            # 尝试使用系统代理
+            self.session.trust_env = True
+            print("[+] 使用系统代理设置")
 
     def check_ip(self, ip: str) -> Dict[str, Any]:
-        """查询IP的地理位置信息"""
+        """查询单个IP的地理位置信息"""
         cache_key = f"geo_{ip}"
         if cache_key in self.cache:
             return self.cache[cache_key]
 
         try:
-            # ip-api.com 免费版每分钟45请求
-            url = f"{self.base_url}{ip}?fields=status,message,country,countryCode,region,regionName,city,isp,org,as"
+            url = f"{self.single_url}{ip}?fields=status,message,country,countryCode,region,regionName,city,isp,org,as"
             response = self.session.get(url, timeout=10)
 
             if response.status_code == 200:
@@ -154,7 +168,6 @@ class GeoIPChecker:
                         'location_type': '国内' if is_china else '国外'
                     }
                     self.cache[cache_key] = result
-                    time.sleep(1.5)  # 避免触发速率限制（每分钟45请求）
                     return result
                 else:
                     return {
@@ -179,6 +192,120 @@ class GeoIPChecker:
                 'is_china': False,
                 'location_type': '未知'
             }
+
+    def check_batch_ips(self, ip_list: List[str]) -> Dict[str, Dict[str, Any]]:
+        """批量查询IP的地理位置信息"""
+        results = {}
+
+        # 过滤已缓存的IP
+        uncached_ips = []
+        for ip in ip_list:
+            cache_key = f"geo_{ip}"
+            if cache_key in self.cache:
+                results[ip] = self.cache[cache_key]
+            else:
+                uncached_ips.append(ip)
+
+        if not uncached_ips:
+            return results
+
+        print(f"\n[+] 开始批量查询 {len(uncached_ips)} 个IP的地理位置信息...")
+
+        # 分批处理，每批最多10个IP
+        for i in range(0, len(uncached_ips), self.batch_size):
+            batch_ips = uncached_ips[i:i + self.batch_size]
+            batch_num = i // self.batch_size + 1
+            total_batches = (len(uncached_ips) + self.batch_size - 1) // self.batch_size
+
+            print(f"[*] 处理批次 {batch_num}/{total_batches}: {', '.join(batch_ips)}")
+
+            try:
+                # 构建批量查询请求
+                batch_data = []
+                for ip in batch_ips:
+                    batch_data.append({
+                        "query": ip,
+                        "fields": "status,message,country,countryCode,region,regionName,city,isp,org,as"
+                    })
+
+                response = self.session.post(
+                    self.base_url,
+                    json=batch_data,
+                    headers={'Content-Type': 'application/json'},
+                    timeout=30
+                )
+
+                if response.status_code == 200:
+                    batch_results = response.json()
+
+                    # 处理每个IP的结果
+                    for j, ip in enumerate(batch_ips):
+                        if j < len(batch_results):
+                            data = batch_results[j]
+
+                            if data.get('status') == 'success':
+                                country_code = data.get('countryCode', '')
+                                country = data.get('country', '')
+
+                                # 判断是否为中国（包括大陆、香港、澳门、台湾）
+                                is_china = country_code in ['CN', 'HK', 'MO', 'TW']
+
+                                result = {
+                                    'success': True,
+                                    'country': country,
+                                    'country_code': country_code,
+                                    'region': data.get('regionName', ''),
+                                    'city': data.get('city', ''),
+                                    'isp': data.get('isp', ''),
+                                    'org': data.get('org', ''),
+                                    'as': data.get('as', ''),
+                                    'is_china': is_china,
+                                    'location_type': '国内' if is_china else '国外'
+                                }
+
+                                # 缓存结果
+                                cache_key = f"geo_{ip}"
+                                self.cache[cache_key] = result
+                                results[ip] = result
+                            else:
+                                result = {
+                                    'success': False,
+                                    'error': data.get('message', 'Unknown error'),
+                                    'is_china': False,
+                                    'location_type': '未知'
+                                }
+                                self.cache[f"geo_{ip}"] = result
+                                results[ip] = result
+                        else:
+                            # 响应数据不匹配
+                            result = {
+                                'success': False,
+                                'error': 'Batch response mismatch',
+                                'is_china': False,
+                                'location_type': '未知'
+                            }
+                            self.cache[f"geo_{ip}"] = result
+                            results[ip] = result
+                else:
+                    print(f"[-] 批量查询失败: HTTP {response.status_code}")
+                    # 如果批量查询失败，回退到单个查询
+                    for ip in batch_ips:
+                        result = self.check_ip(ip)
+                        results[ip] = result
+
+                # 避免触发速率限制 - 批量查询后等待
+                if batch_num < total_batches:
+                    time.sleep(1.0)
+
+            except Exception as e:
+                print(f"[-] 批量查询批次 {batch_num} 失败: {e}")
+                # 如果批量查询出错，回退到单个查询
+                for ip in batch_ips:
+                    result = self.check_ip(ip)
+                    results[ip] = result
+
+        print(f"[+] 批量查询完成，共处理 {len(results)} 个IP")
+        return results
 
 
 class TrafficAnalyzer:
@@ -515,7 +642,8 @@ class TrafficAnalyzer:
                 if dns_result.get('threat', False):
                     ioc_data['dns_threats'][dns] = dns_result
 
-        # GeoIP查询
+        # GeoIP查询 - 现在由analyze_all方法批量处理
+        # 这里保留兜底逻辑，以防某个IP没有被批量查询到
         geo_data = self.geo_checker.check_ip(ip)
 
         analysis_result = {
@@ -548,11 +676,20 @@ class TrafficAnalyzer:
         suspicious_count = 0
         self.all_results = {}  # 存储所有IP的分析结果
 
+        # 先收集所有IP，准备批量查询地理位置
+        all_ips = list(self.data.keys())
+        print(f"\n[+] 批量查询 {len(all_ips)} 个IP的地理位置信息...")
+        geo_results = self.geo_checker.check_batch_ips(all_ips)
+
         for idx, (ip, ip_stats) in enumerate(self.data.items(), 1):
             print(f"\r[*] 进度: {idx}/{total} - 分析 {ip}", end='', flush=True)
 
             result = self.analyze_ip(ip, ip_stats)
             if result:
+                # 使用预先查询的地理位置信息
+                if ip in geo_results:
+                    result['geo'] = geo_results[ip]
+
                 self.all_results[ip] = result
                 if result['is_suspicious']:
                     self.suspicious_ips[ip] = result
@@ -1585,6 +1722,10 @@ def main():
   python analyzer.py capture_stats.json --tolerance 0.2
   python analyzer.py capture_stats.json --otx-api-key YOUR_API_KEY
 
+  # 使用代理查询GeoIP (支持ip-api.com批量查询)
+  python analyzer.py capture_stats.json --proxy
+  python analyzer.py capture_stats.json --proxy --proxy-host 127.0.0.1 --proxy-port 1080
+
 说明:
   通过分析流量的周期性特征（jitter模式）检测潜在的C2通讯。
   C2通讯通常表现为固定间隔发送心跳包或接收指令。
@@ -1592,6 +1733,12 @@ def main():
   使用OTX威胁情报库进行IOC匹配（可选）。
   如果提供--otx-api-key参数，将对IP、SNI、DNS进行威胁情报查询。
   OTX API密钥可在 https://otx.alienvault.com 免费获取。
+
+  GeoIP查询功能:
+  - 使用ip-api.com的批量API，每次最多查询10个IP，大幅提升查询速度
+  - 支持HTTP代理，可通过--proxy参数启用
+  - 自动缓存查询结果，避免重复查询相同IP
+  - 支持国内/国外地理位置判断，帮助识别可疑通讯
         '''
     )
 
@@ -1602,6 +1749,12 @@ def main():
                         help='周期性检测的容差系数 (0-1, 默认: 0.3, 越小越严格)')
     parser.add_argument('--otx-api-key', default='',
                         help='AlienVault OTX API密钥 (可选，用于IOC威胁情报查询)')
+    parser.add_argument('--proxy', action='store_true',
+                        help='使用代理进行GeoIP查询')
+    parser.add_argument('--proxy-host', default='',
+                        help='代理服务器地址 (如: 127.0.0.1)')
+    parser.add_argument('--proxy-port', type=int, default=0,
+                        help='代理服务器端口 (如: 1080)')
 
     args = parser.parse_args()
 
@@ -1612,8 +1765,17 @@ def main():
     else:
         print(f"[!] 未提供OTX API密钥，跳过IOC匹配 (使用 --otx-api-key 启用)")
 
+    # 创建GeoIP检查器（支持代理）
+    if args.proxy:
+        if args.proxy_host and args.proxy_port:
+            geo_checker = GeoIPChecker(use_proxy=True, proxy_host=args.proxy_host, proxy_port=args.proxy_port)
+        else:
+            geo_checker = GeoIPChecker(use_proxy=True)  # 使用系统代理
+    else:
+        geo_checker = GeoIPChecker()
+
     # 创建分析器
-    analyzer = TrafficAnalyzer(args.json_file, otx_checker)
+    analyzer = TrafficAnalyzer(args.json_file, otx_checker, geo_checker)
 
     # 加载数据
     analyzer.load_data()
