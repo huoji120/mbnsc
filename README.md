@@ -1,4 +1,4 @@
-# MB Capture - C2流量检测工具
+# Moblie NetWork Security Checker - C2流量检测工具
 
 [![Go Version](https://img.shields.io/badge/Go-1.20+-blue.svg)](https://golang.org)
 [![Python Version](https://img.shields.io/badge/Python-3.6+-green.svg)](https://www.python.org)
@@ -7,7 +7,7 @@
 
 > 专业的网络流量捕获和C2恶意软件通信检测工具
 
-**MB Capture** 是一个先进的网络安全工具，专门用于检测潜在的命令与控制(C2)恶意软件通信。它结合了实时网络数据包捕获和智能流量模式分析，能够识别出常规网络监控工具难以发现的隐蔽通信行为。
+**MBNSC** 是一个先进的网络安全工具，专门用于检测潜在的命令与控制(C2)恶意软件通信。它结合了实时网络数据包捕获和智能流量模式分析，能够识别出常规网络监控工具难以发现的隐蔽通信行为。
 
 ## ✨ 核心特性
 
